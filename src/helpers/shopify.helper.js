@@ -61,7 +61,7 @@ export const searchShopifyCustomerByPhone = async (phone) => {
  * Create a new customer in Shopify via GraphQL.
  * Returns the created customer object or throws on error.
  */
-export const createShopifyCustomer = async ({ firstName, lastName, phone, address }) => {
+export const createShopifyCustomer = async ({ firstName, lastName, phone, email, address }) => {
   const shopDomain = process.env.shopName;
   const accessToken = process.env.accessToken;
 
@@ -79,6 +79,7 @@ export const createShopifyCustomer = async ({ firstName, lastName, phone, addres
   `;
 
   const input = { firstName, lastName, phone };
+  if (email) input.email = email;
   if (addressInput) input.addresses = addressInput;
 
   const response = await fetch(
@@ -115,22 +116,25 @@ export const getTierBenefits = async (tier) => {
 };
 
 /**
- * Updates the Shopify customer note with their tier benefits and referral pairs.
+ * Updates the Shopify customer note AND tags with their tier info and referral pairs.
+ * Note  — human-readable tier benefits string (visible in Shopify admin).
+ * Tags  — set to the tier name so the customer is tagged e.g. "Silver", "Gold", "Platinum".
+ *
  * @param {string} shopifyCustomerId - numeric Shopify customer ID
- * @param {string} tier - 'silver' | 'gold' | 'platinum'
- * @param {Array}  referralParts - array of {couponCode, phonenumber} to append to the note
+ * @param {string} tier              - 'silver' | 'gold' | 'platinum'
+ * @param {Array}  referralParts     - array of {couponCode, phonenumber} to append to the note
  */
 export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referralParts = []) => {
   const benefits = await getTierBenefits(tier);
   if (!benefits) throw new Error(`No tier benefits found for tier: ${tier}`);
 
+  // ── Build note ────────────────────────────────────────────────────────────
   let note = [
     `Tier: ${tier.charAt(0).toUpperCase() + tier.slice(1)}`,
     `Reward: ${benefits.reward}`,
     `Additional Benefits: ${benefits.additionReward.join(', ')}`,
   ].join(' | ');
 
-  // Append referral pairs: COUPONCODE,PHONE COUPONCODE,PHONE ...
   if (referralParts.length > 0) {
     const referralStr = referralParts
       .filter(r => r.couponCode && r.phonenumber)
@@ -139,14 +143,17 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
     if (referralStr) note += ' ' + referralStr;
   }
 
-  const shopDomain = process.env.shopName;
+  // ── Build tags — tier name as a tag (capitalised) ─────────────────────────
+  const tierTag = tier.charAt(0).toUpperCase() + tier.slice(1); // "Silver" | "Gold" | "Platinum"
+
+  const shopDomain  = process.env.shopName;
   const accessToken = process.env.accessToken;
   const gid = `gid://shopify/Customer/${shopifyCustomerId}`;
 
   const query = `
     mutation customerUpdate($input: CustomerInput!) {
       customerUpdate(input: $input) {
-        customer { id firstName lastName note }
+        customer { id firstName lastName note tags }
         userErrors { field message }
       }
     }
@@ -160,7 +167,10 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': accessToken,
       },
-      body: JSON.stringify({ query, variables: { input: { id: gid, note } } }),
+      body: JSON.stringify({
+        query,
+        variables: { input: { id: gid, note, tags: [tierTag] } },
+      }),
     }
   );
 

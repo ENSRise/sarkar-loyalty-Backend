@@ -6,6 +6,7 @@ import { recalculateCustomerTier } from '../helpers/tier.helper';
 const Customer = db.Customer;
 const TierInfo  = db.TierInfo;
 const Order     = db.Order;
+const Setting   = db.Setting;
 
 // Extract the precise Shopify order ID from the GID string to avoid JS BigInt precision loss.
 // Shopify sends: admin_graphql_api_id = "gid://shopify/Order/820982911946154508"
@@ -174,6 +175,10 @@ export const createOrder = async (req, res) => {
       return successResponse(res, existing, 'Order ID already exists, skipping duplicate webhook');
     }
 
+    // Fetch return window from settings (falls back to 10 if not configured)
+    const creditSetting = await Setting.findOne({ where: { key: 'orderCreditDate' } });
+    const returnWindow  = parseInt(creditSetting?.value || '10', 10);
+
     const customer     = body.customer || {};
     const customerName = `${customer.first_name || ''} ${customer.last_name || ''}`.trim() ||
                          body.billing_address?.name || null;
@@ -193,8 +198,8 @@ export const createOrder = async (req, res) => {
       shippingLines:  body.shipping_lines || [],
       lineItems:      body.line_items     || [],
       orderStatus:    'Hold',
-      returnWindow:   10,
-      creditDay:      calculateCreditDay(new Date(), 10)
+      returnWindow,
+      creditDay:      calculateCreditDay(new Date(), returnWindow)
     });
 
     console.log('Order created:', orderId);

@@ -9,6 +9,7 @@ router.post('/register', CustomerController.registerCustomer);
 
 // Protected — admin only
 router.get('/',                          authenticate, CustomerController.getAllCustomers);
+router.get('/stats',                     authenticate, CustomerController.getCustomerStats);
 router.get('/export',                    authenticate, CustomerController.exportCustomers);
 router.get('/:shopifyCustomerId/orders', authenticate, CustomerController.getCustomerOrders);
 router.get('/:id',                       authenticate, CustomerController.getCustomerById);

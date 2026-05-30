@@ -11,6 +11,7 @@ import {
 import { successResponse, errorResponse } from '../helpers/response.helper';
 
 const Customer = db.Customer;
+const TierInfo  = db.TierInfo;
 
 const getReferralPoints = () => ({
   silver:   parseInt(process.env.SilverReferralPoint   || 100, 10),
@@ -67,6 +68,7 @@ export const submitReferral = async (req, res) => {
         firstName: firstName || '',
         lastName:  lastName  || '',
         phone:     normalizedPhone,
+        email:     email     || null,
       });
     }
 
@@ -126,7 +128,10 @@ export const submitReferral = async (req, res) => {
       console.error('[ReferralController] Shopify note update failed (non-critical):', noteErr.message);
     }
 
-    return successResponse(res, { customerId: newCustomer.id, couponCode }, 'Referral submitted successfully');
+    const tierInfo = await TierInfo.findOne({ where: { shopName: process.env.shopName } });
+    const silverBenefits = tierInfo ? tierInfo.silver : null;
+
+    return successResponse(res, { customerId: newCustomer.id, couponCode, tierBenefits: silverBenefits }, 'Referral submitted successfully');
 
   } catch (err) {
     console.error('[ReferralController] submitReferral error:', err);

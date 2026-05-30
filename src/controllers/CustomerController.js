@@ -8,7 +8,7 @@ import {
   createShopifyCustomer,
   updateShopifyCustomerNote
 } from '../helpers/shopify.helper';
-import { streamCSV, sendPDF } from '../helpers/export.helper';
+import { streamCSV, sendXLSX, sendCustomerXLSX, sendPDF } from '../helpers/export.helper';
 
 const Customer = db.Customer;
 const TierInfo  = db.TierInfo;
@@ -46,35 +46,104 @@ const buildCustomerWhere = (query) => {
   return where;
 };
 
-// ─── Export column definitions ─────────────────────────────────────────────────
+// ─── Export helpers ────────────────────────────────────────────────────────────
 
-const CUSTOMER_CSV_COLUMNS = [
-  { label: 'Shopify Customer ID', key: 'shopifyCustomerId' },
-  { label: 'Shop Name',           key: 'shopName' },
-  { label: 'First Name',          key: 'firstName' },
-  { label: 'Last Name',           key: 'lastName' },
-  { label: 'Email',               key: 'email' },
-  { label: 'Phone',               key: 'phone' },
-  { label: 'Total Spent',         key: 'totalSpent' },
-  { label: 'Orders Count',        key: 'ordersCount' },
-  { label: 'Current Tier',        key: 'currentTier' },
-  { label: 'Birthday',            key: 'birthdayDate' },
-  { label: 'Anniversary',         key: 'anniversaryDate' },
-  { label: 'Joined At',           key: 'createdAt' }
+const fmtTierBenefits = (raw) => {
+  if (!raw) return '';
+  try {
+    const b = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const parts = [];
+    if (b.reward) parts.push(`Reward: ${b.reward}`);
+    if (Array.isArray(b.additionReward) && b.additionReward.length)
+      parts.push(b.additionReward.join(' | '));
+    return parts.join(' — ');
+  } catch { return String(raw); }
+};
+
+const fmtReferrals = (raw) => {
+  if (!raw) return '';
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr) || !arr.length) return '';
+    return arr.map(r => `${r.name || ''} (${r.phonenumber || ''}) Code:${r.couponCode || ''}`).join(' | ');
+  } catch { return ''; }
+};
+
+const fmtDate = (val) => val ? String(val).split('T')[0] : '';
+
+// ─── XLSX columns (full detail) ────────────────────────────────────────────────
+
+const CUSTOMER_XLSX_COLUMNS = [
+  { label: 'Shopify ID',        key: 'shopifyCustomerId', width: 22 },
+  { label: 'First Name',        key: 'firstName',         width: 16 },
+  { label: 'Last Name',         key: 'lastName',          width: 16 },
+  { label: 'Email',             key: 'email',             width: 28 },
+  { label: 'Phone',             key: 'phone',             width: 16 },
+  { label: 'Current Tier',      key: 'currentTier',       width: 14 },
+  { label: 'Tier Benefits',     key: 'tierBenefits',      width: 50, formatter: fmtTierBenefits },
+  { label: 'Total Spent (₹)',   key: 'totalSpent',        width: 16 },
+  { label: 'Orders (Credited)', key: 'ordersCount',       width: 18 },
+  { label: 'Wallet Balance (₹)',key: 'wallet',            width: 18 },
+  { label: 'Referral Count',    key: 'referralCount',     width: 15 },
+  { label: 'Referred Customers',key: 'customerReferralPart', width: 60, formatter: fmtReferrals },
+  { label: 'Birthday',          key: 'birthdayDate',      width: 14, formatter: fmtDate },
+  { label: 'Anniversary',       key: 'anniversaryDate',   width: 14, formatter: fmtDate },
+  { label: 'Joined At',         key: 'createdAt',         width: 20, formatter: fmtDate },
 ];
+
+// ─── PDF columns (landscape printable subset) ─────────────────────────────────
 
 const CUSTOMER_PDF_COLUMNS = [
   { label: 'First Name',    key: 'firstName',    weight: 1.0 },
   { label: 'Last Name',     key: 'lastName',     weight: 1.0 },
-  { label: 'Email',         key: 'email',        weight: 2.0 },
-  { label: 'Phone',         key: 'phone',        weight: 1.2 },
-  { label: 'Total Spent',   key: 'totalSpent',   weight: 1.0 },
-  { label: 'Orders',        key: 'ordersCount',  weight: 0.7 },
+  { label: 'Email',         key: 'email',        weight: 1.8 },
+  { label: 'Phone',         key: 'phone',        weight: 1.1 },
   { label: 'Tier',          key: 'currentTier',  weight: 0.8 },
-  { label: 'Joined At',     key: 'createdAt',    weight: 1.3 }
+  { label: 'Tier Benefits', key: 'tierBenefits', weight: 2.5, formatter: fmtTierBenefits },
+  { label: 'Spent (₹)',     key: 'totalSpent',   weight: 0.9 },
+  { label: 'Orders',        key: 'ordersCount',  weight: 0.6 },
+  { label: 'Wallet (₹)',    key: 'wallet',        weight: 0.8 },
+  { label: 'Referrals',     key: 'referralCount', weight: 0.7 },
+  { label: 'Birthday',      key: 'birthdayDate',  weight: 0.9, formatter: fmtDate },
+  { label: 'Joined At',     key: 'createdAt',     weight: 1.1, formatter: fmtDate },
 ];
 
 // ─── Controllers ──────────────────────────────────────────────────────────────
+
+export const getCustomerStats = async (req, res) => {
+  try {
+    const fn   = Customer.sequelize.fn;
+    const col  = Customer.sequelize.col;
+    const cast = Customer.sequelize.cast;
+
+    const [total, byTier, spentRow] = await Promise.all([
+      Customer.count({}),
+      Customer.findAll({
+        attributes: ['currentTier', [fn('COUNT', col('id')), 'count']],
+        group: ['currentTier'],
+        raw: true,
+      }),
+      Customer.findOne({
+        attributes: [[fn('SUM', cast(col('totalSpent'), 'FLOAT')), 'total']],
+        raw: true,
+      }),
+    ]);
+
+    const tierCounts = { silver: 0, gold: 0, platinum: 0 };
+    byTier.forEach(r => {
+      if (tierCounts[r.currentTier] !== undefined)
+        tierCounts[r.currentTier] = parseInt(r.count);
+    });
+
+    return successResponse(res, {
+      total,
+      ...tierCounts,
+      totalSpent: parseFloat(spentRow?.total || 0),
+    }, 'Customer stats retrieved');
+  } catch (error) {
+    return errorResponse(res, error, 'Failed to get customer stats');
+  }
+};
 
 export const getAllCustomers = async (req, res) => {
   try {
@@ -84,7 +153,7 @@ export const getAllCustomers = async (req, res) => {
 
     const { count, rows } = await Customer.findAndCountAll({
       where,
-      order:  [['totalSpent', 'DESC']],
+      order:  [['createdAt', 'DESC']],
       limit:  parseInt(limit),
       offset
     });
@@ -136,7 +205,7 @@ export const getCustomerOrders = async (req, res) => {
 
 export const registerCustomer = async (req, res) => {
   try {
-    const { firstName, lastName, phone, birthdayDate, anniversaryDate, address } = req.body;
+    const { firstName, lastName, phone, email, birthdayDate, anniversaryDate, address } = req.body;
     console.log('Registering customer with data:', req.body);
     if (!phone) {
       return errorResponse(res, 'Phone number is required', 'Bad Request', 400);
@@ -152,7 +221,11 @@ export const registerCustomer = async (req, res) => {
       let customer = await Customer.findOne({ where: { shopifyCustomerId: shopifyId } });
 
       if (customer) {
-        await customer.update({ birthdayDate: birthdayDate || null, anniversaryDate: anniversaryDate || null });
+        await customer.update({
+          email: email || customer.email || null,
+          birthdayDate: birthdayDate || null,
+          anniversaryDate: anniversaryDate || null
+        });
         return successResponse(res, customer, 'Welcome back! Your loyalty profile has been updated.');
       }
 
@@ -163,7 +236,7 @@ export const registerCustomer = async (req, res) => {
       customer = await Customer.create({
         shopifyCustomerId: shopifyId,
         shopName,
-        email: shopifyCustomer.email || null,
+        email: email || shopifyCustomer.email || null,
         phone: sanitizedPhone,
         firstName: shopifyCustomer.firstName || firstName,
         lastName: shopifyCustomer.lastName || lastName,
@@ -179,7 +252,8 @@ export const registerCustomer = async (req, res) => {
       return successResponse(res, customer, 'You have been added to our loyalty program!', 201);
     }
 
-    const newShopifyCustomer = await createShopifyCustomer({ firstName, lastName, phone: normalizedPhone, address });
+    // Customer not in Shopify — create them (now includes email)
+    const newShopifyCustomer = await createShopifyCustomer({ firstName, lastName, phone: normalizedPhone, email: email || null, address });
     const shopifyId = extractNumericId(newShopifyCustomer.id);
 
     const tierInfo = await TierInfo.findOne({ where: { shopName } });
@@ -189,7 +263,7 @@ export const registerCustomer = async (req, res) => {
     const customer = await Customer.create({
       shopifyCustomerId: shopifyId,
       shopName,
-      email: null,
+      email: email || null,
       phone: sanitizedPhone,
       firstName,
       lastName,
@@ -211,22 +285,18 @@ export const registerCustomer = async (req, res) => {
 
 export const exportCustomers = async (req, res) => {
   try {
-    const { format = 'csv' } = req.query;
+    const { format = 'xlsx' } = req.query;
     const where   = buildCustomerWhere(req.query);
-    const dbOrder = [['totalSpent', 'DESC']];
+    const dbOrder = [['createdAt', 'DESC']];
 
     if (format === 'pdf') {
       const rows = await Customer.findAll({ where, order: dbOrder, raw: true });
       return sendPDF(res, 'customers.pdf', 'Customers Report', CUSTOMER_PDF_COLUMNS, rows);
     }
 
-    // CSV — batch-streamed to handle millions of rows without OOM
-    await streamCSV(
-      res,
-      'customers.csv',
-      CUSTOMER_CSV_COLUMNS,
-      (limit, offset) => Customer.findAll({ where, order: dbOrder, limit, offset, raw: true })
-    );
+    // XLSX — two-sheet workbook: Customers + Referral Details
+    const rows = await Customer.findAll({ where, order: dbOrder, raw: true });
+    return sendCustomerXLSX(res, 'customers.xlsx', CUSTOMER_XLSX_COLUMNS, rows);
   } catch (error) {
     if (!res.headersSent) {
       return errorResponse(res, error, 'Failed to export customers');

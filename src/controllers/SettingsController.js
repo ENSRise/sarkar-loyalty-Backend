@@ -10,6 +10,7 @@ const ALLOWED_KEYS = [
   'goldReferralPoint',
   'platinumReferralPoint',
   'resetCycle',
+  'orderCreditDate',
 ];
 
 export const getSettings = async (req, res) => {
