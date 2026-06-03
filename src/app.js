@@ -16,7 +16,7 @@ app.use('/api', routes);
 
 // Base route
 app.get('/', (req, res) => {
-  res.send('Welcome to the Customer App API');
+  res.send('Welcome to the Customer App API update code version2');
 });
 
 // 404 handler
