@@ -9,6 +9,7 @@ import {
   updateShopifyCustomerNote
 } from '../helpers/shopify.helper';
 import { streamCSV, sendXLSX, sendCustomerXLSX, sendPDF } from '../helpers/export.helper';
+import { findCouponStatus } from '../helpers/coupon.helper';
 
 const Customer = db.Customer;
 const TierInfo  = db.TierInfo;
@@ -303,5 +304,21 @@ export const exportCustomers = async (req, res) => {
     }
     console.error('Export error after headers sent:', error);
     res.end();
+  }
+};
+
+export const getCouponStatus = async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return errorResponse(res, 'phone is required', 'Bad Request', 400);
+    }
+
+    const result = await findCouponStatus(phone);
+    return successResponse(res, result, 'Coupon status retrieved and updated successfully');
+  } catch (error) {
+    const isNotFound = error.message?.includes('not found') || error.message?.includes('Invalid phone');
+    return errorResponse(res, error, error.message, isNotFound ? 404 : 500);
   }
 };

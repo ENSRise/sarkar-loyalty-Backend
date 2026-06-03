@@ -71,6 +71,14 @@ export default (sequelize, DataTypes) => {
     creditDay: {
       type: DataTypes.DATEONLY,
       allowNull: true
+    },
+    couponCode: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    couponAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true
     }
   }, {
     tableName: 'orders',

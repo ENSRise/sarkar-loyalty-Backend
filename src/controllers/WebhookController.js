@@ -183,6 +183,8 @@ export const createOrder = async (req, res) => {
     const customerName = `${customer.first_name || ''} ${customer.last_name || ''}`.trim() ||
                          body.billing_address?.name || null;
 
+    const firstDiscount = (body.discount_codes || [])[0] || null;
+
     const newOrder = await Order.create({
       orderId,
       shopName,
@@ -199,7 +201,9 @@ export const createOrder = async (req, res) => {
       lineItems:      body.line_items     || [],
       orderStatus:    'Hold',
       returnWindow,
-      creditDay:      calculateCreditDay(new Date(), returnWindow)
+      creditDay:      calculateCreditDay(new Date(), returnWindow),
+      couponCode:     firstDiscount?.code   || null,
+      couponAmount:   firstDiscount ? parseFloat(firstDiscount.amount || 0) : null,
     });
 
     console.log('Order created:', orderId);

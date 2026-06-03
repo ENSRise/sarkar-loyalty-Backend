@@ -66,6 +66,14 @@ export default (sequelize, DataTypes) => {
       type: DataTypes.DECIMAL(10, 2),
       defaultValue: 0.00,
       allowNull: false
+    },
+    customerFinalCoupon: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    customerFinalCouponValue: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true
     }
   }, {
     tableName: 'customers',

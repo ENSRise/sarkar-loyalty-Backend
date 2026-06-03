@@ -9,9 +9,10 @@ import tierInfoRoutes from './TierInfoRoutes';
 import customerRoutes from './CustomerRoutes';
 import orderRoutes    from './OrderRoutes';
 import scriptRoutes   from './ScriptRoutes';
-import referralRoutes  from './ReferralRoutes';
-import settingsRoutes  from './SettingsRoutes';
-import { creditApi }   from '../controllers/OrderController';
+import referralRoutes    from './ReferralRoutes';
+import settingsRoutes    from './SettingsRoutes';
+import settlementRoutes  from './SettlementRoutes';
+import { creditApi }     from '../controllers/OrderController';
 
 const router = express.Router();
 
@@ -29,6 +30,7 @@ router.use('/users',      authenticate, userRoutes);
 router.use('/tier-info',  authenticate, tierInfoRoutes);
 router.use('/customers',  customerRoutes);               // auth handled per-route inside (register is public)
 router.use('/orders',     authenticate, orderRoutes);
+router.use('/settlement', authenticate, settlementRoutes);
 router.use('/',           scriptRoutes);                    // public script served to storefront (last — catch-all)
 
 export default router;

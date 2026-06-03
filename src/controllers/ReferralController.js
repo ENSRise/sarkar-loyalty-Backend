@@ -232,7 +232,7 @@ export const checkReferralOrders = async (req, res) => {
         // Update customerReferralPart entry with the assigned coupon
         const updatedReferralPart = (referrer.customerReferralPart || []).map(entry =>
           String(entry.customer_id) === String(reward.referredShopifyId)
-            ? { ...entry, couponCode, couponAssigned: true }
+            ? { ...entry, couponCode, couponAssigned: true, tierAmount: String(pointsToAdd) }
             : entry
         );
 
