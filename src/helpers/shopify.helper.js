@@ -2,6 +2,10 @@ import db from '../models';
 
 const TierInfo = db.TierInfo;
 
+console.log("line 5",process.env.shopName)
+console.log("line 6",process.env.accessToken)
+
+
 // Normalize phone to E.164 — defaults to +91 country code for India
 export const normalizePhone = (phone) => {
   if (!phone) return null;
@@ -126,7 +130,10 @@ export const getTierBenefits = async (tier) => {
  */
 export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referralParts = []) => {
   const benefits = await getTierBenefits(tier);
-  if (!benefits) throw new Error(`No tier benefits found for tier: ${tier}`);
+  if (!benefits) {
+    console.warn(`[Shopify] No TierInfo in DB for tier "${tier}" — note not updated for customer ${shopifyCustomerId}`);
+    return null;
+  }
 
   // ── Build note ────────────────────────────────────────────────────────────
   let note = [
@@ -147,7 +154,11 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
   const tierTag = tier.charAt(0).toUpperCase() + tier.slice(1); // "Silver" | "Gold" | "Platinum"
 
   const shopDomain  = process.env.shopName;
+  console.log("shopDomain",shopDomain)
+  console.log(`[Shopify] Updating customer ${shopifyCustomerId} — setting note: "${note}" and tag: "${tierTag}"`);
   const accessToken = process.env.accessToken;
+  console.log("accessToken",accessToken)
+
   const gid = `gid://shopify/Customer/${shopifyCustomerId}`;
 
   const query = `
@@ -175,6 +186,13 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
   );
 
   const json = await response.json();
+
+  // Top-level GraphQL errors (auth failure, schema issue, etc.)
+  if (json.errors && json.errors.length > 0) {
+    const msg = json.errors.map(e => e.message).join(', ');
+    console.error('[Shopify] customerUpdate GraphQL errors:', msg);
+    throw new Error(msg);
+  }
 
   const userErrors = json?.data?.customerUpdate?.userErrors;
   if (userErrors && userErrors.length > 0) {

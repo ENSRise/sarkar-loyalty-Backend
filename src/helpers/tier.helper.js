@@ -89,8 +89,13 @@ export const recalculateCustomerTier = async (shopifyCustomerId) => {
 
   console.log(`[TierHelper] Customer ${customerId} upgraded: ${customer.currentTier} → ${qualifiedTier}`);
 
-  // 9. Sync note back to Shopify customer profile (preserve existing referral pairs)
-  await updateShopifyCustomerNote(customerId, qualifiedTier, customer.customerReferralPart || []);
+  // 9. Sync note back to Shopify customer profile (preserve existing referral pairs).
+  // Best-effort — a Shopify API failure must not roll back the DB tier upgrade.
+  try {
+    await updateShopifyCustomerNote(customerId, qualifiedTier, customer.customerReferralPart || []);
+  } catch (noteErr) {
+    console.error(`[TierHelper] Shopify note update failed for customer ${customerId}:`, noteErr.message);
+  }
 
   return customer.reload();
 };

@@ -111,7 +111,15 @@ export const createCustomer = async (req, res) => {
     });
 
     console.log('New Customer Created:', newCustomer.shopifyCustomerId);
-    await updateShopifyCustomerNote(id, 'silver');
+
+    // Best-effort — note sync failure must NOT cause a 500 or Shopify will retry
+    // and the idempotency guard will block all future note updates for this customer.
+    try {
+      await updateShopifyCustomerNote(id, 'silver');
+    } catch (noteErr) {
+      console.error('[Webhook] Shopify note update failed for customer', id, noteErr.message);
+    }
+
     return successResponse(res, newCustomer, 'Customer created successfully', 201);
   } catch (error) {
     console.error('Error in createCustomer Webhook:', error);
