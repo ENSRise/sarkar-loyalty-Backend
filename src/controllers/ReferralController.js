@@ -51,13 +51,27 @@ export const submitReferral = async (req, res) => {
       return errorResponse(res, null, 'phoneNumber and whomReferNumber are required', 400);
     }
 
+    const phoneDigitsCheck       = String(phoneNumber).replace(/\D/g, '');
+    const whomReferDigitsCheck   = String(whomReferNumber).replace(/\D/g, '');
+    console.log("whomReferDigitsCheck",whomReferDigitsCheck)
+
+    if (phoneDigitsCheck.length !== 10) {
+      return errorResponse(res, null, `phoneNumber must be 10 digits (received ${phoneDigitsCheck.length} digits: "${phoneDigitsCheck}")`, 400);
+    }
+    if (whomReferDigitsCheck.length !== 10) {
+      return errorResponse(res, null, `whomReferNumber must be 10 digits (received ${whomReferDigitsCheck.length} digits: "${whomReferDigitsCheck}")`, 400);
+    }
+
     // ── Phase 1: Read-only DB checks (no writes) ───────────────────────────
     const referrer = await findCustomerByPhone(whomReferNumber);
+    console.log("referrer",referrer)
     if (!referrer) {
       return errorResponse(res, null, 'Invalid referral: customer has not joined our loyalty program', 404);
     }
 
     const alreadyJoined = await findCustomerByPhone(phoneNumber);
+    console.log("alreadyJoined",alreadyJoined)
+
     if (alreadyJoined) {
       return errorResponse(res, null, 'Referral customer is already joined with our loyalty program', 409);
     }
@@ -65,6 +79,9 @@ export const submitReferral = async (req, res) => {
     // ── Phase 2: All Shopify API calls (before any DB writes) ─────────────
     // If any Shopify call fails here nothing is written to DB.
     const normalizedPhone = normalizePhone(phoneNumber);
+    console.log("normalizedPhone",normalizedPhone)
+    console.log(`[submitReferral] Phase 2 — phoneNumber: "${phoneNumber}" → normalized: "${normalizedPhone}"`);
+
     let shopifyCustomer = await searchShopifyCustomerByPhone(normalizedPhone);
     if (!shopifyCustomer) {
       shopifyCustomer = await createShopifyCustomer({
@@ -73,9 +90,13 @@ export const submitReferral = async (req, res) => {
         phone:     normalizedPhone,
         email:     email     || null,
       });
+      console.log(`[submitReferral] Phase 2 — new Shopify customer created: id=${shopifyCustomer.id} phone=${shopifyCustomer.phone}`);
+    } else {
+      console.log(`[submitReferral] Phase 2 — existing Shopify customer found: id=${shopifyCustomer.id} phone=${shopifyCustomer.phone} name=${shopifyCustomer.firstName} ${shopifyCustomer.lastName}`);
     }
 
     const shopifyCustomerId = extractNumericId(shopifyCustomer.id);
+    console.log(`[submitReferral] Phase 2 — shopifyCustomerId extracted: ${shopifyCustomerId}`);
     const phoneDigits       = String(phoneNumber).replace(/\D/g, '');
 
     const updatedReferralPart = [
@@ -128,11 +149,23 @@ export const submitReferral = async (req, res) => {
 
     // ── Phase 4: Shopify note sync (best-effort, after DB is committed) ────
     // Non-critical — DB is already saved. Note failure does NOT fail the request.
+    console.log(`[submitReferral] Phase 4 — syncing Shopify notes`);
+    console.log(`  shopName env   : ${process.env.shopName}`);
+    console.log(`  referrer id    : ${referrer.shopifyCustomerId}  tier: ${referrer.currentTier || 'silver'}`);
+    console.log(`  new customer id: ${shopifyCustomerId}`);
+
     try {
       await updateShopifyCustomerNote(referrer.shopifyCustomerId, referrer.currentTier || 'silver', updatedReferralPart);
-      await updateShopifyCustomerNote(shopifyCustomerId, 'silver', []);
+      console.log(`[submitReferral] ✅ Referrer note updated (${referrer.shopifyCustomerId})`);
     } catch (noteErr) {
-      console.error('[submitReferral] Shopify note update failed (non-critical):', noteErr.message);
+      console.error(`[submitReferral] ❌ Referrer note failed (id: ${referrer.shopifyCustomerId}):`, noteErr.message);
+    }
+
+    try {
+      await updateShopifyCustomerNote(shopifyCustomerId, 'silver', []);
+      console.log(`[submitReferral] ✅ New customer note updated (${shopifyCustomerId})`);
+    } catch (noteErr) {
+      console.error(`[submitReferral] ❌ New customer note failed (id: ${shopifyCustomerId}):`, noteErr.message);
     }
 
     const tierInfo       = await TierInfo.findOne({ where: { shopName: process.env.shopName } });

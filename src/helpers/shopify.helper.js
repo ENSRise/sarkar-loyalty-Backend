@@ -23,8 +23,15 @@ export const extractNumericId = (gid) => String(gid).split('/').pop();
  * Returns the customer node or null if not found.
  */
 export const searchShopifyCustomerByPhone = async (phone) => {
+  console.log(`[Shopify:searchByPhone] searching for phone: "${phone}"`);
+
   const shopDomain = process.env.shopName;
   const accessToken = process.env.accessToken;
+
+  console.log("shopDomain",shopDomain);
+  console.log("accessToken",accessToken);
+
+
 
   const query = `
     query searchCustomer($query: String!) {
@@ -58,6 +65,15 @@ export const searchShopifyCustomerByPhone = async (phone) => {
 
   const json = await response.json();
   const edges = json?.data?.customers?.edges || [];
+
+  console.log(`[Shopify:searchByPhone] searched: "${phone}" on shop: ${shopDomain}`);
+  if (edges.length > 0) {
+    const found = edges[0].node;
+    console.log(`[Shopify:searchByPhone] found    → id: ${found.id} | phone: ${found.phone} | name: ${found.firstName} ${found.lastName}`);
+  } else {
+    console.log(`[Shopify:searchByPhone] not found → will create new customer`);
+  }
+
   return edges.length > 0 ? edges[0].node : null;
 };
 
@@ -154,12 +170,16 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
   const tierTag = tier.charAt(0).toUpperCase() + tier.slice(1); // "Silver" | "Gold" | "Platinum"
 
   const shopDomain  = process.env.shopName;
-  console.log("shopDomain",shopDomain)
-  console.log(`[Shopify] Updating customer ${shopifyCustomerId} — setting note: "${note}" and tag: "${tierTag}"`);
   const accessToken = process.env.accessToken;
-  console.log("accessToken",accessToken)
-
   const gid = `gid://shopify/Customer/${shopifyCustomerId}`;
+
+  console.log(`[Shopify:customerUpdate] ── DEBUG ──`);
+  console.log(`  shopDomain  : ${shopDomain}`);
+  console.log(`  accessToken : ${accessToken ? '****' + accessToken.slice(-4) : 'MISSING'}`);
+  console.log(`  customerId  : ${shopifyCustomerId}`);
+  console.log(`  GID         : ${gid}`);
+  console.log(`  tier        : ${tier}  tag: ${tierTag}`);
+  console.log(`  note        : ${note}`);
 
   const query = `
     mutation customerUpdate($input: CustomerInput!) {
@@ -186,19 +206,23 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
   );
 
   const json = await response.json();
+  console.log(`[Shopify:customerUpdate] raw response:`, JSON.stringify(json));
 
   // Top-level GraphQL errors (auth failure, schema issue, etc.)
   if (json.errors && json.errors.length > 0) {
     const msg = json.errors.map(e => e.message).join(', ');
-    console.error('[Shopify] customerUpdate GraphQL errors:', msg);
+    console.error(`[Shopify:customerUpdate] GraphQL error for GID ${gid} on shop ${shopDomain}: ${msg}`);
     throw new Error(msg);
   }
 
   const userErrors = json?.data?.customerUpdate?.userErrors;
   if (userErrors && userErrors.length > 0) {
-    throw new Error(userErrors.map(e => e.message).join(', '));
+    const msg = userErrors.map(e => e.message).join(', ');
+    console.error(`[Shopify:customerUpdate] userErrors for GID ${gid} on shop ${shopDomain}: ${msg}`);
+    throw new Error(msg);
   }
 
+  console.log(`[Shopify:customerUpdate] ✅ success — customer ${shopifyCustomerId} updated on ${shopDomain}`);
   return json?.data?.customerUpdate?.customer;
 };
 
