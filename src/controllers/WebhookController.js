@@ -2,6 +2,7 @@ import db from '../models';
 import { successResponse, errorResponse } from '../helpers/response.helper';
 import { updateShopifyCustomerNote } from '../helpers/shopify.helper';
 import { recalculateCustomerTier } from '../helpers/tier.helper';
+import { markSettlementCouponsUsedFromOrder } from '../helpers/settlement.helper';
 
 const Customer = db.Customer;
 const TierInfo  = db.TierInfo;
@@ -215,6 +216,21 @@ export const createOrder = async (req, res) => {
     });
 
     console.log('Order created:', orderId);
+
+    // Best-effort — must NOT fail order ingestion (and trigger a Shopify
+    // webhook retry storm) if coupon-matching has an issue. The order is
+    // already safely persisted above regardless of outcome here.
+    try {
+      await markSettlementCouponsUsedFromOrder({
+        shopifyCustomerId: newOrder.shopifyCustomerId,
+        discountCodes:     body.discount_codes || [],
+        orderId:           newOrder.orderId,
+        orderCreatedAt:    newOrder.createdAt,
+      });
+    } catch (couponErr) {
+      console.error('[Webhook] markSettlementCouponsUsedFromOrder failed for order', orderId, couponErr.message);
+    }
+
     return successResponse(res, newOrder, 'Order created successfully', 201);
   } catch (error) {
     console.error('Error in createOrder Webhook:', error);

@@ -8,6 +8,7 @@ import {
   createShopifyCustomer,
   updateShopifyCustomerNote
 } from '../helpers/shopify.helper';
+import { removeInterest } from './InterestedCustomerController';
 import { streamCSV, sendXLSX, sendCustomerXLSX, sendPDF } from '../helpers/export.helper';
 import { findCouponStatus } from '../helpers/coupon.helper';
 
@@ -227,6 +228,7 @@ export const registerCustomer = async (req, res) => {
           birthdayDate: birthdayDate || null,
           anniversaryDate: anniversaryDate || null
         });
+        await removeInterest(phone);
         return successResponse(res, customer, 'Welcome back! Your loyalty profile has been updated.');
       }
 
@@ -250,6 +252,7 @@ export const registerCustomer = async (req, res) => {
       });
 
       await updateShopifyCustomerNote(shopifyId, 'silver');
+      await removeInterest(phone);
       return successResponse(res, customer, 'You have been added to our loyalty program!', 201);
     }
 
@@ -277,6 +280,7 @@ export const registerCustomer = async (req, res) => {
     });
 
     await updateShopifyCustomerNote(shopifyId, 'silver');
+    await removeInterest(phone);
     return successResponse(res, customer, 'Welcome to our loyalty program!', 201);
   } catch (error) {
     console.error('Error in registerCustomer:', error);

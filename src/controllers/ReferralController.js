@@ -4,11 +4,11 @@ import {
   searchShopifyCustomerByPhone,
   createShopifyCustomer,
   updateShopifyCustomerNote,
-  createShopifyDiscountCode,
   normalizePhone,
   extractNumericId,
 } from '../helpers/shopify.helper';
 import { successResponse, errorResponse } from '../helpers/response.helper';
+import { removeInterest } from './InterestedCustomerController';
 
 const Customer       = db.Customer;
 const TierInfo       = db.TierInfo;
@@ -147,6 +147,9 @@ export const submitReferral = async (req, res) => {
     });
     // If transaction throws, all three writes are rolled back automatically.
 
+    // Remove from interested customers — they've now joined via referral (best-effort)
+    await removeInterest(phoneNumber);
+
     // ── Phase 4: Shopify note sync (best-effort, after DB is committed) ────
     // Non-critical — DB is already saved. Note failure does NOT fail the request.
     console.log(`[submitReferral] Phase 4 — syncing Shopify notes`);
@@ -257,10 +260,12 @@ export const checkReferralOrders = async (req, res) => {
 
         const tierKey     = referrer.currentTier || 'silver';
         const pointsToAdd = points[tierKey] ?? points.silver;
+        // Internal tracking code only — no Shopify discount is created here.
+        // The wallet balance this represents only becomes a real, redeemable
+        // Shopify coupon when the customer settles (see settlement.helper.js);
+        // customerFinalCoupon/customerFinalCouponValue is the single source
+        // of truth for what's actually live in Shopify.
         const couponCode  = generateCouponCode();
-
-        // Shopify call first — before any DB write
-        await createShopifyDiscountCode(referrer.shopifyCustomerId, pointsToAdd, couponCode);
 
         // Update customerReferralPart entry with the assigned coupon
         const updatedReferralPart = (referrer.customerReferralPart || []).map(entry =>

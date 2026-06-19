@@ -98,5 +98,10 @@ export default (sequelize, DataTypes) => {
     ]
   });
 
+  Customer.associate = (db) => {
+    Customer.hasMany(db.SettlementCoupon, { foreignKey: 'customerId', as: 'settlementCoupons' });
+    Customer.hasMany(db.CustomerBonusLog, { foreignKey: 'customerId', as: 'bonusLogs' });
+  };
+
   return Customer;
 };

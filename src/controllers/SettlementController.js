@@ -1,18 +1,13 @@
 import db from '../models';
 import { successResponse, errorResponse } from '../helpers/response.helper';
-import { createShopifyDiscountCode } from '../helpers/shopify.helper';
+import {
+  calcAvailableBalance,
+  issueSettlementCoupon,
+  SettlementError,
+} from '../helpers/settlement.helper';
 
-const Customer = db.Customer;
-const Order    = db.Order;
-
-const ALLOWED_AMOUNTS = [200, 400, 600];
-
-const generateCouponCode = () => {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = 'SET';
-  for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
-  return code;
-};
+const Customer         = db.Customer;
+const SettlementCoupon = db.SettlementCoupon;
 
 // Find customer by last-10-digit phone match
 const findCustomerByPhone = (phone) => {
@@ -27,15 +22,16 @@ const findCustomerByPhone = (phone) => {
 
 /**
  * POST /api/settlement/settle
- * Body: { phone, amount }   — amount must be 200 | 400 | 600
+ * Body: { phone, amount } — amount must be a positive number not exceeding
+ * the customer's available referral wallet balance. No fixed denominations:
+ * the storefront/admin UI is free to offer quick-pick buttons (e.g. 200 /
+ * 300 / 500 / "Total balance") — the backend only enforces amount <= balance.
  *
- * Flow:
- *  1. Find customer by phone.
- *  2. Block if customerFinalCoupon already exists (pending or used).
- *  3. Walk customerReferralPart entries (with couponCode assigned), consume `amount`
- *     greedily — update remaining-amount + coupon-status per entry.
- *  4. Create a Shopify discount code for the full settlement amount.
- *  5. Save customerFinalCoupon + customerFinalCouponValue + updated referralPart.
+ * Merge-or-create logic (see settlement.helper.js issueSettlementCoupon):
+ *  - If the customer already holds an unused settlement coupon, the
+ *    requested amount is merged into it (same DB row, new code + combined
+ *    value, old Shopify code voided).
+ *  - Otherwise a brand-new coupon row is created for just this amount.
  */
 export const settleAmount = async (req, res) => {
   try {
@@ -46,116 +42,44 @@ export const settleAmount = async (req, res) => {
     }
 
     const settlementAmount = parseInt(amount, 10);
-    if (!ALLOWED_AMOUNTS.includes(settlementAmount)) {
-      return errorResponse(
-        res,
-        `amount must be one of: ${ALLOWED_AMOUNTS.join(', ')}`,
-        'Bad Request',
-        400
-      );
+    if (!Number.isFinite(settlementAmount) || settlementAmount <= 0) {
+      return errorResponse(res, 'amount must be a positive number', 'Bad Request', 400);
     }
 
-    // ── 1. Find customer ──────────────────────────────────────────────
     const customer = await findCustomerByPhone(phone);
     if (!customer) {
       return errorResponse(res, 'Customer not found for this phone number', 'Not Found', 404);
     }
 
-    // ── 2. Guard: final coupon already exists ─────────────────────────
-    if (customer.customerFinalCoupon) {
-      // Check if it has been used in an order
-      const usedInOrder = await Order.findOne({
-        where: {
-          shopifyCustomerId: String(customer.shopifyCustomerId),
-          couponCode:        customer.customerFinalCoupon,
-        },
-      });
+    const result = await issueSettlementCoupon(customer.id, settlementAmount);
 
-      return errorResponse(
-        res,
-        {
-          coupon:  customer.customerFinalCoupon,
-          value:   customer.customerFinalCouponValue,
-          usedInOrder: !!usedInOrder,
-        },
-        usedInOrder
-          ? 'Settlement coupon already used in an order. Cannot generate a new one.'
-          : 'Settlement coupon already generated but not yet used. Cannot generate a new one.',
-        409
-      );
-    }
-
-    // ── 3. Consume settlementAmount from referral parts ───────────────
-    const referralPart = customer.customerReferralPart || [];
-
-    let remaining = settlementAmount;
-    const updatedPart = referralPart.map(entry => {
-      // Skip entries with no coupon assigned (Pending) or already fully consumed
-      if (!entry.couponCode || remaining <= 0) return entry;
-
-      // current available = remaining-amount if set, else full tierAmount
-      const available = parseFloat(
-        entry['remaining-amount'] !== undefined
-          ? entry['remaining-amount']
-          : (entry.tierAmount ?? 0)
-      );
-
-      if (available <= 0) {
-        // Already exhausted — normalize stale PartialUsed to Used
-        return entry['coupon-status'] !== 'Used'
-          ? { ...entry, 'remaining-amount': '0', 'coupon-status': 'Used' }
-          : entry;
-      }
-
-      if (available <= remaining) {
-        // Fully consumed
-        remaining -= available;
-        return { ...entry, 'remaining-amount': '0', 'coupon-status': 'Used' };
-      } else {
-        // Partially consumed — amount left over
-        const leftover = available - remaining;
-        remaining = 0;
-        return { ...entry, 'remaining-amount': String(leftover), 'coupon-status': 'PartialUsed' };
-      }
-    });
-
-    if (remaining > 0) {
-      return errorResponse(
-        res,
-        `Insufficient referral balance. Short by ₹${remaining} (only ₹${settlementAmount - remaining} available).`,
-        'Bad Request',
-        400
-      );
-    }
-
-    // ── 4. Create Shopify discount code ───────────────────────────────
-    const couponCode = generateCouponCode();
-    await createShopifyDiscountCode(customer.shopifyCustomerId, settlementAmount, couponCode);
-
-    // ── 5. Persist all changes atomically ─────────────────────────────
-    await customer.update({
-      customerFinalCoupon:      couponCode,
-      customerFinalCouponValue: settlementAmount,
-      customerReferralPart:     updatedPart,
-    });
+    const message = result.merged
+      ? `Merged ₹${settlementAmount} into existing coupon — new coupon ${result.coupon.couponCode} for ₹${result.coupon.couponValue} generated`
+      : `Settlement coupon ${result.coupon.couponCode} for ₹${settlementAmount} generated successfully`;
 
     return successResponse(res, {
       customer: {
-        id:               customer.id,
+        id:                customer.id,
         shopifyCustomerId: customer.shopifyCustomerId,
-        firstName:        customer.firstName,
-        lastName:         customer.lastName,
-        phone:            customer.phone,
-        currentTier:      customer.currentTier,
+        firstName:         customer.firstName,
+        lastName:          customer.lastName,
+        phone:             customer.phone,
+        currentTier:       customer.currentTier,
       },
       settlement: {
-        couponCode,
-        couponValue:      settlementAmount,
+        couponCode:         result.coupon.couponCode,
+        couponValue:        parseFloat(result.coupon.couponValue),
+        merged:             result.merged,
+        previousCouponCode: result.previousCouponCode,
       },
-      updatedReferralPart: updatedPart,
-    }, `Settlement coupon ${couponCode} for ₹${settlementAmount} generated successfully`);
+      updatedReferralPart: result.updatedReferralPart,
+      remainingBalance:    result.remainingBalance,
+    }, message);
 
   } catch (error) {
+    if (error instanceof SettlementError) {
+      return errorResponse(res, error.message, 'Bad Request', error.statusCode);
+    }
     console.error('[SettlementController] settleAmount error:', error);
     return errorResponse(res, error, 'Failed to process settlement', 500);
   }
@@ -177,45 +101,45 @@ export const getSettlementStatus = async (req, res) => {
       return errorResponse(res, 'Customer not found for this phone number', 'Not Found', 404);
     }
 
-    // Check if final coupon was used in an order
-    let finalCouponUsed = false;
-    if (customer.customerFinalCoupon) {
-      const order = await Order.findOne({
-        where: {
-          shopifyCustomerId: String(customer.shopifyCustomerId),
-          couponCode:        customer.customerFinalCoupon,
-        },
-      });
-      finalCouponUsed = !!order;
-    }
+    const referralPart   = customer.customerReferralPart || [];
+    const totalAvailable = calcAvailableBalance(referralPart);
 
-    // Calculate total available balance from referral parts
-    const referralPart = customer.customerReferralPart || [];
-    const totalAvailable = referralPart
-      .filter(e => e.couponCode)
-      .reduce((sum, e) => {
-        const available = parseFloat(
-          e['remaining-amount'] !== undefined ? e['remaining-amount'] : (e.tierAmount ?? 0)
-        );
-        return sum + Math.max(0, available);
-      }, 0);
+    // Full settlement history for this customer — couponUsed is now stored
+    // directly on each row (set by the order webhook), no need to cross-query
+    // the orders table here.
+    const history = await SettlementCoupon.findAll({
+      where: { customerId: customer.id },
+      order: [['createdAt', 'DESC']],
+    });
+
+    const settlementHistory = history.map(h => ({
+      couponCode:  h.couponCode,
+      couponValue: parseFloat(h.couponValue),
+      used:        h.couponUsed,
+      usedOrderId: h.usedOrderId,
+      usedAt:      h.usedAt,
+      createdAt:   h.createdAt,
+    }));
+
+    const activeCoupon = history.find(h => h.couponCode === customer.customerFinalCoupon);
 
     return successResponse(res, {
       customer: {
-        id:               customer.id,
+        id:                customer.id,
         shopifyCustomerId: customer.shopifyCustomerId,
-        firstName:        customer.firstName,
-        lastName:         customer.lastName,
-        phone:            customer.phone,
-        currentTier:      customer.currentTier,
+        firstName:         customer.firstName,
+        lastName:          customer.lastName,
+        phone:             customer.phone,
+        currentTier:       customer.currentTier,
       },
       finalCoupon: {
-        code:   customer.customerFinalCoupon || null,
-        value:  customer.customerFinalCouponValue || null,
-        used:   finalCouponUsed,
+        code:  customer.customerFinalCoupon || null,
+        value: customer.customerFinalCouponValue || null,
+        used:  activeCoupon ? activeCoupon.couponUsed : false,
       },
       totalAvailableBalance: totalAvailable,
       referralPart,
+      settlementHistory,
     }, 'Settlement status retrieved');
 
   } catch (error) {

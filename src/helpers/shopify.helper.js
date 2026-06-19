@@ -231,8 +231,9 @@ export const updateShopifyCustomerNote = async (shopifyCustomerId, tier, referra
  * @param {string} shopifyCustomerId - numeric Shopify customer ID (kept for future use / logging)
  * @param {number} amount - discount amount in INR
  * @param {string} code - the discount code string (e.g. "REFABC123")
+ * @param {string} [title] - label shown in Shopify admin (defaults to "Referral Reward")
  */
-export const createShopifyDiscountCode = async (shopifyCustomerId, amount, code) => {
+export const createShopifyDiscountCode = async (shopifyCustomerId, amount, code, title = 'Referral Reward') => {
   const shopDomain = process.env.shopName;
   const accessToken = process.env.accessToken;
 
@@ -262,7 +263,7 @@ export const createShopifyDiscountCode = async (shopifyCustomerId, amount, code)
 
   const variables = {
     basicCodeDiscount: {
-      title: `Referral Reward - ${code}`,
+      title: `${title} - ${code}`,
       code,
       startsAt: new Date().toISOString(),
       usageLimit: 1,
@@ -311,4 +312,56 @@ export const createShopifyDiscountCode = async (shopifyCustomerId, amount, code)
   const node = json?.data?.discountCodeBasicCreate?.codeDiscountNode;
   console.log(`[Shopify] Discount code created — code: ${code}, node id: ${node?.id}`);
   return node;
+};
+
+/**
+ * Deactivates a previously created discount code (used when a settlement
+ * coupon is superseded by a merged, higher-value one — the old code must
+ * stop working so it can't be redeemed twice).
+ * @param {string} codeDiscountNodeId - the Shopify GID returned by createShopifyDiscountCode
+ */
+export const deactivateShopifyDiscountCode = async (codeDiscountNodeId) => {
+  if (!codeDiscountNodeId) return null;
+
+  const shopDomain = process.env.shopName;
+  const accessToken = process.env.accessToken;
+
+  const mutation = `
+    mutation discountCodeDeactivate($id: ID!) {
+      discountCodeDeactivate(id: $id) {
+        codeDiscountNode { id }
+        userErrors { field code message }
+      }
+    }
+  `;
+
+  const response = await fetch(
+    `https://${shopDomain}/admin/api/2025-04/graphql.json`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': accessToken,
+      },
+      body: JSON.stringify({ query: mutation, variables: { id: codeDiscountNodeId } }),
+    }
+  );
+
+  const json = await response.json();
+
+  if (json.errors && json.errors.length > 0) {
+    const msg = json.errors.map(e => e.message).join(', ');
+    console.error('[Shopify] discountCodeDeactivate GraphQL errors:', msg);
+    throw new Error(msg);
+  }
+
+  const userErrors = json?.data?.discountCodeDeactivate?.userErrors;
+  if (userErrors && userErrors.length > 0) {
+    const msg = userErrors.map(e => `${e.code}: ${e.message}`).join(', ');
+    console.error('[Shopify] discountCodeDeactivate userErrors:', msg);
+    throw new Error(msg);
+  }
+
+  console.log(`[Shopify] Discount code deactivated — node id: ${codeDiscountNodeId}`);
+  return json?.data?.discountCodeDeactivate?.codeDiscountNode;
 };
