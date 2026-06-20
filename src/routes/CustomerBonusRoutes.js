@@ -10,6 +10,7 @@ router.use(authenticate, authorize('super_admin'));
 
 router.get('/find',                       CustomerBonusController.findCustomer);
 router.post('/grant',                     CustomerBonusController.grantBonus);
+router.post('/bulk-grant',                CustomerBonusController.bulkGrant);
 router.get('/history/:shopifyCustomerId', CustomerBonusController.getBonusHistory);
 
 export default router;
